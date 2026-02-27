@@ -1,0 +1,1126 @@
+
+
+"use client"
+
+import React, { useState, useRef } from "react"
+import { motion, AnimatePresence } from "framer-motion"
+import useSWR from "swr"
+import {
+  Plus,
+  Search,
+  ImageIcon,
+  Edit,
+  Trash2,
+  Eye,
+  Loader2,
+  RefreshCw,
+  XCircle,
+  BarChart2,
+  MousePointer,
+  Clock,
+  CheckCircle,
+  PauseCircle,
+  Calendar,
+  ExternalLink,
+  Building,
+  User,
+  Mail,
+  Phone,
+  Globe,
+  DollarSign,
+  FileText,
+  Send,
+  Upload,
+  X,
+} from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  DialogFooter,
+} from "@/components/ui/dialog"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import { Badge } from "@/components/ui/badge"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { cn } from "@/lib/utils"
+import { useNotifications } from "@/contexts/notification-context"
+
+// Pricing configuration
+const PRICING = {
+  daily: { amount: 550, label: "N$550 per day" },
+  weekly: { amount: 3000, label: "N$3,000 per week" },
+  monthly: { amount: 9800, label: "N$9,800 per month" },
+}
+
+interface Advertisement {
+  id: string
+  title: string
+  description: string | null
+  image_url: string
+  link_url: string | null
+  position:
+  | "home-banner"
+  | "browse-sidebar"
+  | "listing-detail"
+  | "dashboard"
+
+  ad_type: "paid" | "sponsored"
+  status: "active" | "inactive" | "scheduled" | "expired"
+  start_date: string | null
+  end_date: string | null
+  impressions: number
+  clicks: number
+  created_by: string
+  created_at: string
+  updated_at: string
+  // Paid ad specific
+  business_name: string | null
+  contact_person: string | null
+  email: string | null
+  phone: string | null
+  website: string | null
+  duration_type: string | null
+  duration_days: number | null
+  pricing_package: string | null
+  total_amount: number | null
+  payment_status: "pending" | "paid" | "overdue" | "refunded" | null
+  invoice_number: string | null
+}
+
+interface AdsResponse {
+  advertisements: Advertisement[]
+  stats: {
+    total: number
+    active: number
+    scheduled: number
+    inactive: number
+    totalImpressions: number
+    totalClicks: number
+    paidCount: number
+    sponsoredCount: number
+    totalRevenue: number
+  }
+  pricing: typeof PRICING
+}
+
+interface AdFormData {
+  title: string
+  description: string
+  imageUrl: string
+  linkUrl: string
+  position: string
+  adType: "paid" | "sponsored"
+  status: string
+  startDate: string
+  endDate: string
+  businessName: string
+  contactPerson: string
+  email: string
+  phone: string
+  website: string
+  durationType: string
+  durationDays: string
+}
+
+const fetcher = (url: string) => fetch(url).then((res) => res.json())
+
+const statusColors: Record<string, string> = {
+  active: "bg-green-500/10 text-green-500 border-green-500/20",
+  inactive: "bg-gray-500/10 text-gray-500 border-gray-500/20",
+  scheduled: "bg-blue-500/10 text-blue-500 border-blue-500/20",
+  expired: "bg-red-500/10 text-red-500 border-red-500/20",
+}
+
+const paymentColors: Record<string, string> = {
+  pending: "bg-yellow-500/10 text-yellow-500 border-yellow-500/20",
+  paid: "bg-green-500/10 text-green-500 border-green-500/20",
+  overdue: "bg-red-500/10 text-red-500 border-red-500/20",
+  refunded: "bg-gray-500/10 text-gray-500 border-gray-500/20",
+}
+
+const positionLabels: Record<string, string> = {
+  hero: "Hero Banner",
+  sidebar: "Sidebar",
+  feed: "In-Feed",
+  banner: "Banner",
+}
+
+function formatDate(dateStr: string): string {
+  const date = new Date(dateStr)
+  return date.toLocaleDateString("en-NA", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  })
+}
+
+function formatCurrency(amount: number): string {
+  return new Intl.NumberFormat("en-NA", {
+    style: "currency",
+    currency: "NAD",
+    minimumFractionDigits: 2,
+  }).format(amount)
+}
+
+const initialFormData: AdFormData = {
+  title: "",
+  description: "",
+  imageUrl: "",
+  linkUrl: "",
+  position: "banner",
+  adType: "sponsored",
+  status: "inactive",
+  startDate: "",
+  endDate: "",
+  businessName: "",
+  contactPerson: "",
+  email: "",
+  phone: "",
+  website: "",
+  durationType: "daily",
+  durationDays: "1",
+}
+
+export function AdminAdvertisements() {
+  const [search, setSearch] = useState("")
+  const [statusFilter, setStatusFilter] = useState("all")
+  const [typeFilter, setTypeFilter] = useState("all")
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false)
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
+  const [selectedAd, setSelectedAd] = useState<Advertisement | null>(null)
+  const [isProcessing, setIsProcessing] = useState(false)
+  const { showToast } = useNotifications()
+
+  const [adForm, setAdForm] = useState<AdFormData>(initialFormData)
+  const [isUploading, setIsUploading] = useState(false)
+
+  // Handle image file upload for advertisements
+  const handleImageUpload = async (file: File) => {
+    if (!file) return
+
+    // Validate file type
+    const allowedTypes = ["image/jpeg", "image/png", "image/webp"]
+    if (!allowedTypes.includes(file.type)) {
+      showToast({
+        type: "error",
+        title: "Invalid File Type",
+        message: "Please upload a JPEG, PNG, or WebP image",
+        duration: 4000,
+      })
+      return
+    }
+
+    // Validate file size (5MB max)
+    if (file.size > 5 * 1024 * 1024) {
+      showToast({
+        type: "error",
+        title: "File Too Large",
+        message: "Maximum file size is 5MB",
+        duration: 4000,
+      })
+      return
+    }
+
+    setIsUploading(true)
+    try {
+      const formData = new FormData()
+      formData.append("file", file)
+      formData.append("type", "advertisement")
+
+      const response = await fetch("/api/upload", {
+        method: "POST",
+        body: formData,
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || "Upload failed")
+      }
+
+      // Update form with uploaded image URL
+      setAdForm((prev) => ({ ...prev, imageUrl: result.url }))
+      
+      showToast({
+        type: "success",
+        title: "Image Uploaded",
+        message: "Advertisement image uploaded successfully",
+        duration: 3000,
+      })
+    } catch (error) {
+      showToast({
+        type: "error",
+        title: "Upload Failed",
+        message: error instanceof Error ? error.message : "Failed to upload image",
+        duration: 5000,
+      })
+    } finally {
+      setIsUploading(false)
+    }
+  }
+
+  const buildApiUrl = () => {
+    const params = new URLSearchParams()
+    if (statusFilter !== "all") params.set("status", statusFilter)
+    if (typeFilter !== "all") params.set("adType", typeFilter)
+    return `/api/admin/ads?${params.toString()}`
+  }
+
+  const { data, error, isLoading, mutate } = useSWR<AdsResponse>(
+    buildApiUrl(),
+    fetcher,
+    { refreshInterval: 30000 }
+  )
+
+  const ads = data?.advertisements || []
+  const stats = data?.stats || {
+    total: 0,
+    active: 0,
+    scheduled: 0,
+    inactive: 0,
+    totalImpressions: 0,
+    totalClicks: 0,
+    paidCount: 0,
+    sponsoredCount: 0,
+    totalRevenue: 0,
+  }
+
+  const filteredAds = ads.filter(
+    (ad) =>
+      ad.title.toLowerCase().includes(search.toLowerCase()) ||
+      (ad.description && ad.description.toLowerCase().includes(search.toLowerCase())) ||
+      (ad.business_name && ad.business_name.toLowerCase().includes(search.toLowerCase()))
+  )
+
+  const handleCreateAd = async () => {
+    if (!adForm.title || !adForm.imageUrl || !adForm.position) {
+      showToast({ type: "error", title: "Validation Error", message: "Please fill all required fields", duration: 3000 })
+      return
+    }
+
+    if (adForm.adType === "paid") {
+      if (!adForm.businessName || !adForm.contactPerson || !adForm.email || !adForm.phone || !adForm.durationType) {
+        showToast({
+          type: "error",
+          title: "Validation Error",
+          message: "Paid ads require business name, contact person, email, phone, and duration",
+          duration: 4000,
+        })
+        return
+      }
+    }
+
+    setIsProcessing(true)
+    try {
+      const response = await fetch("/api/admin/ads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...adForm,
+          durationDays: adForm.durationDays ? Number.parseInt(adForm.durationDays) : null,
+        }),
+      })
+
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error)
+
+      showToast({
+        type: "success",
+        title: adForm.adType === "paid" ? "Paid Ad Created" : "Sponsored Ad Created",
+        message: result.message || "Advertisement created successfully",
+        duration: 4000,
+      })
+      setIsCreateModalOpen(false)
+      resetForm()
+      mutate()
+    } catch (error) {
+      showToast({
+        type: "error",
+        title: "Creation Failed",
+        message: error instanceof Error ? error.message : "Failed to create ad",
+        duration: 5000,
+      })
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  const handleUpdateAd = async () => {
+    if (!selectedAd) return
+
+    setIsProcessing(true)
+    try {
+      const response = await fetch("/api/admin/ads", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: selectedAd.id, ...adForm }),
+      })
+
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error)
+
+      showToast({ type: "success", title: "Advertisement Updated", message: "Changes saved successfully", duration: 3000 })
+      setIsEditModalOpen(false)
+      resetForm()
+      mutate()
+    } catch (error) {
+      showToast({
+        type: "error",
+        title: "Update Failed",
+        message: error instanceof Error ? error.message : "Failed to update ad",
+        duration: 5000,
+      })
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  const handleDeleteAd = async () => {
+    if (!selectedAd) return
+
+    setIsProcessing(true)
+    try {
+      const response = await fetch("/api/admin/ads", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: selectedAd.id }),
+      })
+
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error)
+
+      showToast({ type: "success", title: "Advertisement Deleted", message: "Ad has been removed", duration: 3000 })
+      setIsDeleteDialogOpen(false)
+      setSelectedAd(null)
+      mutate()
+    } catch (error) {
+      showToast({
+        type: "error",
+        title: "Deletion Failed",
+        message: error instanceof Error ? error.message : "Failed to delete ad",
+        duration: 5000,
+      })
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  const handleToggleStatus = async (ad: Advertisement) => {
+    setIsProcessing(true)
+    try {
+      const newStatus = ad.status === "active" ? "inactive" : "active"
+      const response = await fetch("/api/admin/ads", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: ad.id, status: newStatus }),
+      })
+
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error)
+
+      showToast({ type: "success", title: "Status Updated", message: `Ad is now ${newStatus}`, duration: 3000 })
+      mutate()
+    } catch (error) {
+      showToast({
+        type: "error",
+        title: "Update Failed",
+        message: error instanceof Error ? error.message : "Failed to update status",
+        duration: 5000,
+      })
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  const openEditModal = (ad: Advertisement) => {
+    setSelectedAd(ad)
+    setAdForm({
+      title: ad.title,
+      description: ad.description || "",
+      imageUrl: ad.image_url,
+      linkUrl: ad.link_url || "",
+      position: ad.position,
+      adType: ad.ad_type,
+      status: ad.status,
+      startDate: ad.start_date ? new Date(ad.start_date).toISOString().split("T")[0] : "",
+      endDate: ad.end_date ? new Date(ad.end_date).toISOString().split("T")[0] : "",
+      businessName: ad.business_name || "",
+      contactPerson: ad.contact_person || "",
+      email: ad.email || "",
+      phone: ad.phone || "",
+      website: ad.website || "",
+      durationType: ad.duration_type || "daily",
+      durationDays: ad.duration_days?.toString() || "1",
+    })
+    setIsEditModalOpen(true)
+  }
+
+  const openDeleteDialog = (ad: Advertisement) => {
+    setSelectedAd(ad)
+    setIsDeleteDialogOpen(true)
+  }
+
+  const resetForm = () => {
+    setAdForm(initialFormData)
+    setSelectedAd(null)
+  }
+
+  const getCTR = (impressions: number, clicks: number) => {
+    if (impressions === 0) return "0.00"
+    return ((clicks / impressions) * 100).toFixed(2)
+  }
+
+  const calculatePrice = () => {
+    if (adForm.adType !== "paid") return 0
+    const days = Number.parseInt(adForm.durationDays) || 1
+    const pricing = PRICING[adForm.durationType as keyof typeof PRICING]
+    if (!pricing) return 0
+    const daysInPeriod = adForm.durationType === "daily" ? 1 : adForm.durationType === "weekly" ? 7 : 30
+    return (pricing.amount / daysInPeriod) * days
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">Advertisement Management</h1>
+          <p className="text-muted-foreground">Manage paid and sponsored advertisements</p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" className="rounded-xl bg-transparent" onClick={() => mutate()}>
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Refresh
+          </Button>
+          <Dialog open={isCreateModalOpen} onOpenChange={setIsCreateModalOpen}>
+            <DialogTrigger asChild>
+              <Button className="rounded-xl" onClick={resetForm}>
+                <Plus className="h-4 w-4 mr-2" />
+                Create Ad
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="w-[95vw] max-w-2xl max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>Create Advertisement</DialogTitle>
+                <DialogDescription>Add a new paid or sponsored advertisement</DialogDescription>
+              </DialogHeader>
+              <AdForm form={adForm} setForm={setAdForm} calculatePrice={calculatePrice} isUploading={isUploading} onImageUpload={handleImageUpload} />
+              <DialogFooter className="mt-6 flex-col sm:flex-row gap-2">
+                <Button variant="outline" onClick={() => setIsCreateModalOpen(false)} className="bg-transparent w-full sm:w-auto">
+                  Cancel
+                </Button>
+                <Button onClick={handleCreateAd} disabled={isProcessing} className="w-full sm:w-auto">
+                  {isProcessing ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Plus className="h-4 w-4 mr-2" />
+                  )}
+                  {adForm.adType === "paid" ? `Create & Generate Invoice (${formatCurrency(calculatePrice())})` : "Create Sponsored Ad"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        {[
+          { label: "Total Ads", value: stats.total, color: "text-foreground", icon: ImageIcon },
+          { label: "Active", value: stats.active, color: "text-green-500", icon: CheckCircle },
+          { label: "Paid Ads", value: stats.paidCount, color: "text-blue-500", icon: DollarSign },
+          { label: "Sponsored", value: stats.sponsoredCount, color: "text-purple-500", icon: FileText },
+          { label: "Impressions", value: stats.totalImpressions.toLocaleString(), color: "text-orange-500", icon: Eye },
+          { label: "Revenue", value: formatCurrency(stats.totalRevenue), color: "text-green-600", icon: DollarSign },
+        ].map((stat, i) => (
+          <motion.div key={stat.label} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}>
+            <Card className="bg-card border-border">
+              <CardContent className="p-3 sm:p-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <stat.icon className={cn("h-4 w-4", stat.color)} />
+                  <span className="text-xs text-muted-foreground truncate">{stat.label}</span>
+                </div>
+                <p className={cn("text-lg sm:text-xl font-bold truncate", stat.color)}>{stat.value}</p>
+              </CardContent>
+            </Card>
+          </motion.div>
+        ))}
+      </div>
+
+      {/* Filters */}
+      <div className="flex flex-col sm:flex-row gap-3">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search advertisements..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-10 bg-muted border-0 rounded-xl"
+          />
+        </div>
+        <Select value={typeFilter} onValueChange={setTypeFilter}>
+          <SelectTrigger className="w-full sm:w-36 bg-muted border-0 rounded-xl">
+            <SelectValue placeholder="Type" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Types</SelectItem>
+            <SelectItem value="paid">Paid Ads</SelectItem>
+            <SelectItem value="sponsored">Sponsored</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={statusFilter} onValueChange={setStatusFilter}>
+          <SelectTrigger className="w-full sm:w-36 bg-muted border-0 rounded-xl">
+            <SelectValue placeholder="Status" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Status</SelectItem>
+            <SelectItem value="active">Active</SelectItem>
+            <SelectItem value="scheduled">Scheduled</SelectItem>
+            <SelectItem value="inactive">Inactive</SelectItem>
+            <SelectItem value="expired">Expired</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* Ad Grid */}
+      {isLoading ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {[...Array(6)].map((_, i) => (
+            <Card key={i} className="bg-card border-border overflow-hidden">
+              <Skeleton className="h-40 w-full" />
+              <CardContent className="p-4 space-y-2">
+                <Skeleton className="h-5 w-3/4" />
+                <Skeleton className="h-4 w-1/2" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      ) : error ? (
+        <Card className="bg-card border-border">
+          <CardContent className="p-12 text-center">
+            <XCircle className="w-12 h-12 text-destructive mx-auto mb-4" />
+            <p className="text-muted-foreground">Failed to load advertisements</p>
+            <Button variant="outline" size="sm" className="mt-4 bg-transparent" onClick={() => mutate()}>
+              Try Again
+            </Button>
+          </CardContent>
+        </Card>
+      ) : filteredAds.length === 0 ? (
+        <Card className="bg-card border-border">
+          <CardContent className="p-12 text-center">
+            <ImageIcon className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+            <p className="text-lg font-medium text-foreground mb-1">No advertisements found</p>
+            <p className="text-muted-foreground">Create your first ad to get started</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <AnimatePresence>
+            {filteredAds.map((ad, i) => (
+              <motion.div
+                key={ad.id}
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                transition={{ delay: i * 0.03 }}
+              >
+                <Card className="bg-card border-border overflow-hidden group">
+                  {/* Image Preview */}
+                  <div className="relative h-40 bg-muted overflow-hidden">
+                    <img
+                      src={ad.image_url || "/placeholder.svg"}
+                      alt={ad.title}
+                      className="w-full h-full object-cover transition-transform group-hover:scale-105"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src =
+                          "https://images.unsplash.com/photo-1560472355-536de3962603?w=800&h=400&fit=crop"
+                      }}
+                    />
+                    <div className="absolute top-2 left-2 flex flex-wrap gap-1">
+                      <Badge variant="outline" className={statusColors[ad.status]}>
+                        {ad.status}
+                      </Badge>
+                      <Badge variant="outline" className={ad.ad_type === "paid" ? "bg-blue-500/10 text-blue-500 border-blue-500/20" : "bg-purple-500/10 text-purple-500 border-purple-500/20"}>
+                        {ad.ad_type}
+                      </Badge>
+                      {ad.payment_status && (
+                        <Badge variant="outline" className={paymentColors[ad.payment_status]}>
+                          {ad.payment_status}
+                        </Badge>
+                      )}
+                    </div>
+                    {ad.link_url && (
+                      <a
+                        href={ad.link_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="absolute top-2 right-2 bg-background/80 p-1.5 rounded-lg hover:bg-background transition-colors"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                      </a>
+                    )}
+                  </div>
+
+                  {/* Content */}
+                  <CardContent className="p-4">
+                    <h3 className="font-semibold text-foreground line-clamp-1">{ad.title}</h3>
+
+                    {ad.ad_type === "paid" && ad.business_name && (
+                      <p className="text-sm text-muted-foreground mt-1 flex items-center gap-1">
+                        <Building className="h-3 w-3" />
+                        {ad.business_name}
+                      </p>
+                    )}
+
+                    {ad.total_amount && ad.total_amount > 0 && (
+                      <p className="text-sm font-semibold text-green-500 mt-1">{formatCurrency(ad.total_amount)}</p>
+                    )}
+
+                    {/* Stats */}
+                    <div className="flex items-center gap-4 mt-3 text-sm">
+                      <div className="flex items-center gap-1 text-muted-foreground">
+                        <Eye className="h-3.5 w-3.5" />
+                        <span>{ad.impressions.toLocaleString()}</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-muted-foreground">
+                        <MousePointer className="h-3.5 w-3.5" />
+                        <span>{ad.clicks.toLocaleString()}</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-muted-foreground">
+                        <BarChart2 className="h-3.5 w-3.5" />
+                        <span>{getCTR(ad.impressions, ad.clicks)}% CTR</span>
+                      </div>
+                    </div>
+
+                    {/* Date Range */}
+                    {(ad.start_date || ad.end_date) && (
+                      <div className="flex items-center gap-1 mt-2 text-xs text-muted-foreground">
+                        <Calendar className="h-3 w-3" />
+                        <span>
+                          {ad.start_date ? formatDate(ad.start_date) : "Start"} - {ad.end_date ? formatDate(ad.end_date) : "No end"}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Actions */}
+                    <div className="flex items-center gap-2 mt-4 pt-4 border-t border-border">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="flex-1 bg-transparent"
+                        onClick={() => handleToggleStatus(ad)}
+                        disabled={isProcessing}
+                      >
+                        {ad.status === "active" ? (
+                          <>
+                            <PauseCircle className="h-4 w-4 mr-1" />
+                            Pause
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle className="h-4 w-4 mr-1" />
+                            Activate
+                          </>
+                        )}
+                      </Button>
+                      <Button variant="outline" size="icon" className="bg-transparent" onClick={() => openEditModal(ad)}>
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="bg-transparent text-red-500 hover:text-red-600 hover:bg-red-500/10"
+                        onClick={() => openDeleteDialog(ad)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              </motion.div>
+            ))}
+          </AnimatePresence>
+        </div>
+      )}
+
+      {/* Edit Modal */}
+      <Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
+        <DialogContent className="w-[95vw] max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit Advertisement</DialogTitle>
+            <DialogDescription>Update advertisement details</DialogDescription>
+          </DialogHeader>
+          <AdForm form={adForm} setForm={setAdForm} calculatePrice={calculatePrice} isEdit isUploading={isUploading} onImageUpload={handleImageUpload} />
+          <DialogFooter className="mt-6 flex-col sm:flex-row gap-2">
+            <Button variant="outline" onClick={() => setIsEditModalOpen(false)} className="bg-transparent w-full sm:w-auto">
+              Cancel
+            </Button>
+            <Button onClick={handleUpdateAd} disabled={isProcessing} className="w-full sm:w-auto">
+              {isProcessing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <CheckCircle className="h-4 w-4 mr-2" />}
+              Save Changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Dialog */}
+      <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <AlertDialogContent className="w-[95vw] max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Advertisement</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete "{selectedAd?.title}"? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-col sm:flex-row gap-2">
+            <AlertDialogCancel className="w-full sm:w-auto">Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteAd} disabled={isProcessing} className="bg-red-500 hover:bg-red-600 w-full sm:w-auto">
+              {isProcessing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Trash2 className="h-4 w-4 mr-2" />}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  )
+}
+
+// Enhanced form component for Paid and Sponsored ads with file upload
+function AdForm({
+  form,
+  setForm,
+  calculatePrice,
+  isEdit = false,
+  isUploading = false,
+  onImageUpload,
+}: {
+  form: AdFormData
+  setForm: (form: AdFormData) => void
+  calculatePrice: () => number
+  isEdit?: boolean
+  isUploading?: boolean
+  onImageUpload?: (file: File) => Promise<void>
+}) {
+  const fileInputRef = React.useRef<HTMLInputElement>(null)
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file && onImageUpload) {
+      await onImageUpload(file)
+    }
+    // Reset the input so the same file can be selected again
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ""
+    }
+  }
+
+  return (
+    <div className="space-y-6 mt-4">
+      {/* Ad Type Selection */}
+      {!isEdit && (
+        <Tabs value={form.adType} onValueChange={(v) => setForm({ ...form, adType: v as "paid" | "sponsored" })}>
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="sponsored" className="flex items-center gap-2">
+              <FileText className="h-4 w-4" />
+              Sponsored (Free)
+            </TabsTrigger>
+            <TabsTrigger value="paid" className="flex items-center gap-2">
+              <DollarSign className="h-4 w-4" />
+              Paid Advert
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+      )}
+
+      {/* Basic Details */}
+      <div className="space-y-4">
+        <div>
+          <Label>Title *</Label>
+          <Input
+            value={form.title}
+            onChange={(e) => setForm({ ...form, title: e.target.value })}
+            placeholder="Ad title"
+            className="mt-1"
+          />
+        </div>
+        <div>
+          <Label>Description</Label>
+          <Textarea
+            value={form.description}
+            onChange={(e) => setForm({ ...form, description: e.target.value })}
+            placeholder="Brief description of the ad"
+            className="mt-1"
+            rows={2}
+          />
+        </div>
+        
+        {/* Image Upload Section */}
+        <div>
+          <Label>Advertisement Image *</Label>
+          <div className="mt-2 space-y-3">
+            {/* File Upload */}
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                onChange={handleFileSelect}
+                className="hidden"
+                id="ad-image-upload"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                className="flex-1 bg-transparent"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isUploading}
+              >
+                {isUploading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Uploading...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="h-4 w-4 mr-2" />
+                    Upload Image
+                  </>
+                )}
+              </Button>
+              <span className="text-xs text-muted-foreground self-center">or</span>
+              <Input
+                value={form.imageUrl}
+                onChange={(e) => setForm({ ...form, imageUrl: e.target.value })}
+                placeholder="Enter image URL"
+                className="flex-1"
+                disabled={isUploading}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Supported formats: JPEG, PNG, WebP. Max size: 5MB
+            </p>
+            
+            {/* Image Preview */}
+            {form.imageUrl && (
+              <div className="relative h-40 bg-muted rounded-lg overflow-hidden group">
+                <img
+                  src={form.imageUrl || "/placeholder.svg"}
+                  alt="Preview"
+                  className="w-full h-full object-cover"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).src = "https://images.unsplash.com/photo-1560472355-536de3962603?w=800&h=400&fit=crop"
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="icon"
+                  className="absolute top-2 right-2 h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
+                  onClick={() => setForm({ ...form, imageUrl: "" })}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
+          </div>
+        </div>
+        <div>
+          <Label>Link URL</Label>
+          <Input
+            value={form.linkUrl}
+            onChange={(e) => setForm({ ...form, linkUrl: e.target.value })}
+            placeholder="https://example.com/landing-page"
+            className="mt-1"
+          />
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <Label>Position *</Label>
+            <Select value={form.position} onValueChange={(v) => setForm({ ...form, position: v })}>
+              <SelectTrigger className="mt-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+  <SelectItem value="home-banner">Home – Top Banner</SelectItem>
+  <SelectItem value="in-feed">In-Feed (Between Listings)</SelectItem>
+  <SelectItem value="browse-sidebar">Browse – Sidebar</SelectItem>
+  <SelectItem value="listing-detail">Listing – Detail Page</SelectItem>
+</SelectContent>
+
+
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label>Status</Label>
+            <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}>
+              <SelectTrigger className="mt-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="inactive">Inactive</SelectItem>
+                <SelectItem value="active">Active</SelectItem>
+                <SelectItem value="scheduled">Scheduled</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      </div>
+
+      {/* Paid Ad Client Details */}
+      {form.adType === "paid" && (
+        <div className="space-y-4 p-4 border border-blue-500/20 rounded-xl bg-blue-500/5">
+          <h3 className="font-semibold text-foreground flex items-center gap-2">
+            <Building className="h-4 w-4 text-blue-500" />
+            Client Details
+          </h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <Label className="flex items-center gap-1">
+                <Building className="h-3 w-3" /> Business Name *
+              </Label>
+              <Input
+                value={form.businessName}
+                onChange={(e) => setForm({ ...form, businessName: e.target.value })}
+                placeholder="Company Name"
+                className="mt-1"
+              />
+            </div>
+            <div>
+              <Label className="flex items-center gap-1">
+                <User className="h-3 w-3" /> Contact Person *
+              </Label>
+              <Input
+                value={form.contactPerson}
+                onChange={(e) => setForm({ ...form, contactPerson: e.target.value })}
+                placeholder="Full Name"
+                className="mt-1"
+              />
+            </div>
+            <div>
+              <Label className="flex items-center gap-1">
+                <Mail className="h-3 w-3" /> Email Address *
+              </Label>
+              <Input
+                type="email"
+                value={form.email}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}
+                placeholder="email@company.com"
+                className="mt-1"
+              />
+            </div>
+            <div>
+              <Label className="flex items-center gap-1">
+                <Phone className="h-3 w-3" /> Phone Number *
+              </Label>
+              <Input
+                value={form.phone}
+                onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                placeholder="+264 81 123 4567"
+                className="mt-1"
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <Label className="flex items-center gap-1">
+                <Globe className="h-3 w-3" /> Website (Optional)
+              </Label>
+              <Input
+                value={form.website}
+                onChange={(e) => setForm({ ...form, website: e.target.value })}
+                placeholder="https://www.company.com"
+                className="mt-1"
+              />
+            </div>
+          </div>
+
+          {/* Pricing */}
+          <div className="space-y-4 pt-4 border-t border-blue-500/20">
+            <h4 className="font-medium text-foreground flex items-center gap-2">
+              <DollarSign className="h-4 w-4 text-green-500" />
+              Pricing Package
+            </h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <Label>Duration Type *</Label>
+                <Select value={form.durationType} onValueChange={(v) => setForm({ ...form, durationType: v })}>
+                  <SelectTrigger className="mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="daily">{PRICING.daily.label}</SelectItem>
+                    <SelectItem value="weekly">{PRICING.weekly.label}</SelectItem>
+                    <SelectItem value="monthly">{PRICING.monthly.label}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Number of Days</Label>
+                <Input
+                  type="number"
+                  min="1"
+                  value={form.durationDays}
+                  onChange={(e) => setForm({ ...form, durationDays: e.target.value })}
+                  placeholder="1"
+                  className="mt-1"
+                />
+              </div>
+            </div>
+            <div className="p-3 rounded-lg bg-green-500/10 border border-green-500/20">
+              <p className="text-sm text-muted-foreground">Estimated Total</p>
+              <p className="text-2xl font-bold text-green-500">{formatCurrency(calculatePrice())}</p>
+              <p className="text-xs text-muted-foreground mt-1">Quotation and invoice will be auto-generated</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Schedule */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <Label>Start Date</Label>
+          <Input
+            type="date"
+            value={form.startDate}
+            onChange={(e) => setForm({ ...form, startDate: e.target.value })}
+            className="mt-1"
+          />
+        </div>
+        <div>
+          <Label>End Date</Label>
+          <Input
+            type="date"
+            value={form.endDate}
+            onChange={(e) => setForm({ ...form, endDate: e.target.value })}
+            className="mt-1"
+          />
+        </div>
+      </div>
+    </div>
+  )
+}

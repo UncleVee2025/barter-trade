@@ -1,0 +1,988 @@
+"use client"
+
+import { useState, useEffect, useRef, useCallback } from "react"
+import { motion, AnimatePresence, useInView } from "framer-motion"
+import {
+  Plus,
+  ArrowRight,
+  Clock,
+  Heart,
+  Flame,
+  ChevronRight,
+  BadgeCheck,
+  Wallet,
+  ArrowUpRight,
+  ChevronLeft,
+  Eye,
+  TrendingUp,
+  Calendar,
+  Zap,
+  ArrowRightLeft,
+  Shield,
+  MapPin,
+  Search,
+  Layers,
+  Crown,
+  Sparkles,
+  RefreshCw,
+} from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { useWallet } from "@/contexts/wallet-context"
+import { useAuth } from "@/contexts/auth-context"
+import { UserAvatar } from "@/components/ui/user-avatar"
+import {
+  SmartphoneIcon,
+  CarIcon,
+  HomeIcon,
+  ShirtIcon,
+  CowIcon,
+  WrenchIcon,
+  GemIcon,
+  SofaIcon,
+  WheatIcon,
+} from "@/components/icons/modern-icons"
+import Link from "next/link"
+import Image from "next/image"
+import { cn } from "@/lib/utils"
+import useSWR from "swr"
+import { UnifiedListingCard, type UnifiedListingData } from "@/components/listings/unified-listing-card"
+import { ModernListingModal } from "@/components/listings/modern-listing-modal"
+
+// SWR fetcher with refresh
+const fetcher = (url: string) => fetch(url).then((res) => res.json())
+
+// Currency formatter for NAD (Namibian Dollars)
+function formatNAD(amount: number): string {
+  return `N$ ${amount.toLocaleString("en-NA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+// Animated counter with smooth counting effect
+function AnimatedCounter({ 
+  value, 
+  prefix = "", 
+  suffix = "",
+  duration = 1500,
+  decimals = 0
+}: { 
+  value: number
+  prefix?: string
+  suffix?: string
+  duration?: number
+  decimals?: number
+}) {
+  const [count, setCount] = useState(0)
+  const ref = useRef<HTMLSpanElement>(null)
+  const isInView = useInView(ref, { once: true })
+
+  useEffect(() => {
+    if (!isInView) return
+    
+    let startTime: number
+    let animationFrame: number
+    
+    const animate = (currentTime: number) => {
+      if (!startTime) startTime = currentTime
+      const progress = Math.min((currentTime - startTime) / duration, 1)
+      
+      const easeOutExpo = 1 - Math.pow(2, -10 * progress)
+      const currentValue = easeOutExpo * value
+      setCount(decimals > 0 ? parseFloat(currentValue.toFixed(decimals)) : Math.floor(currentValue))
+      
+      if (progress < 1) {
+        animationFrame = requestAnimationFrame(animate)
+      }
+    }
+    
+    animationFrame = requestAnimationFrame(animate)
+    return () => cancelAnimationFrame(animationFrame)
+  }, [value, duration, isInView, decimals])
+
+  return (
+    <span ref={ref} className="tabular-nums font-mono">
+      {prefix}{decimals > 0 ? count.toFixed(decimals) : count.toLocaleString()}{suffix}
+    </span>
+  )
+}
+
+// Live status indicator
+function LiveIndicator({ isLive = true }: { isLive?: boolean }) {
+  return (
+    <div className="flex items-center gap-2">
+      <div className="relative">
+        <div className={cn(
+          "w-2 h-2 rounded-full",
+          isLive ? "bg-emerald-500" : "bg-muted-foreground"
+        )}>
+          {isLive && (
+            <div className="absolute inset-0 rounded-full bg-emerald-500 animate-ping opacity-75" />
+          )}
+        </div>
+      </div>
+      <span className={cn(
+        "text-xs font-medium",
+        isLive ? "text-emerald-600" : "text-muted-foreground"
+      )}>
+        {isLive ? "Live" : "Offline"}
+      </span>
+    </div>
+  )
+}
+
+// Category icon mapping
+const categoryIcons: Record<string, typeof SmartphoneIcon> = {
+  electronics: SmartphoneIcon,
+  vehicles: CarIcon,
+  property: HomeIcon,
+  "home-garden": SofaIcon,
+  fashion: ShirtIcon,
+  livestock: CowIcon,
+  services: WrenchIcon,
+  collectibles: GemIcon,
+  agriculture: WheatIcon,
+  other: GemIcon,
+}
+
+// Category colors mapping - Modern vibrant palette
+const categoryColors: Record<string, { gradient: string; bg: string; text: string; border: string }> = {
+  electronics: { gradient: "from-blue-500 to-cyan-400", bg: "bg-blue-50", text: "text-blue-600", border: "border-blue-200" },
+  vehicles: { gradient: "from-rose-500 to-orange-400", bg: "bg-rose-50", text: "text-rose-600", border: "border-rose-200" },
+  property: { gradient: "from-amber-500 to-yellow-400", bg: "bg-amber-50", text: "text-amber-600", border: "border-amber-200" },
+  "home-garden": { gradient: "from-teal-500 to-emerald-400", bg: "bg-teal-50", text: "text-teal-600", border: "border-teal-200" },
+  fashion: { gradient: "from-pink-500 to-rose-400", bg: "bg-pink-50", text: "text-pink-600", border: "border-pink-200" },
+  livestock: { gradient: "from-lime-500 to-green-400", bg: "bg-lime-50", text: "text-lime-600", border: "border-lime-200" },
+  services: { gradient: "from-violet-500 to-purple-400", bg: "bg-violet-50", text: "text-violet-600", border: "border-violet-200" },
+  collectibles: { gradient: "from-indigo-500 to-blue-400", bg: "bg-indigo-50", text: "text-indigo-600", border: "border-indigo-200" },
+  agriculture: { gradient: "from-emerald-500 to-teal-400", bg: "bg-emerald-50", text: "text-emerald-600", border: "border-emerald-200" },
+  sports: { gradient: "from-cyan-500 to-blue-400", bg: "bg-cyan-50", text: "text-cyan-600", border: "border-cyan-200" },
+  other: { gradient: "from-gray-500 to-slate-400", bg: "bg-gray-50", text: "text-gray-600", border: "border-gray-200" },
+}
+
+// Listing Card Component
+function ListingCard({ listing, index }: { listing: Record<string, unknown>; index: number }) {
+  const colors = categoryColors[(listing.category as string) || "other"] || categoryColors.other
+  
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: 0.03 * index }}
+    >
+      <Link href={`/dashboard/listings/${listing.id}`}>
+        <Card className="overflow-hidden hover:shadow-xl transition-all duration-300 border-border/50 hover:border-primary/30 group cursor-pointer bg-card">
+          {/* Image */}
+          <div className="relative aspect-[4/3] overflow-hidden bg-muted">
+            <Image
+              src={(listing.primaryImage as string) || "/placeholder.svg"}
+              alt={listing.title as string}
+              fill
+              className="object-cover group-hover:scale-105 transition-transform duration-500"
+            />
+            {/* Featured badge */}
+            {listing.featured && (
+              <div className="absolute top-2 left-2">
+                <Badge className="bg-gradient-to-r from-amber-500 to-orange-500 text-white border-0 gap-1">
+                  <Flame className="h-3 w-3" />
+                  Hot
+                </Badge>
+              </div>
+            )}
+            {/* Save button */}
+            <button className="absolute top-2 right-2 w-8 h-8 rounded-full bg-white/90 backdrop-blur-sm flex items-center justify-center shadow-lg opacity-0 group-hover:opacity-100 transition-opacity hover:bg-white hover:text-rose-500">
+              <Heart className="h-4 w-4" />
+            </button>
+            {/* Category tag */}
+            <div className="absolute bottom-2 left-2">
+              <Badge variant="secondary" className={cn("text-xs", colors.bg, colors.text, colors.border)}>
+                {listing.categoryName || "Other"}
+              </Badge>
+            </div>
+          </div>
+          
+          {/* Content */}
+          <CardContent className="p-4">
+            <h3 className="font-semibold text-foreground line-clamp-1 group-hover:text-primary transition-colors">
+              {listing.title as string}
+            </h3>
+            <p className="text-lg font-bold text-primary mt-1">
+              {formatNAD(Number(listing.value) || 0)}
+            </p>
+            
+            {/* Meta info */}
+            <div className="flex items-center justify-between mt-3 text-xs text-muted-foreground">
+              <div className="flex items-center gap-1">
+                <MapPin className="h-3 w-3" />
+                <span>{(listing.location as { region?: string })?.region || "Unknown"}</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="flex items-center gap-1">
+                  <Eye className="h-3 w-3" />
+                  {listing.views as number || 0}
+                </span>
+                <span className="flex items-center gap-1">
+                  <Heart className="h-3 w-3" />
+                  {listing.saves as number || 0}
+                </span>
+              </div>
+            </div>
+            
+            {/* User info */}
+            <div className="flex items-center gap-2 mt-3 pt-3 border-t border-border/50">
+              <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center overflow-hidden">
+                {(listing.user as { avatar?: string })?.avatar ? (
+                  <Image 
+                    src={(listing.user as { avatar?: string }).avatar || "/placeholder.svg"
+                    alt="" 
+                    width={24} 
+                    height={24} 
+                    className="object-cover" 
+                  />
+                ) : (
+                  <span className="text-xs font-medium text-primary">
+                    {((listing.user as { name?: string })?.name || "U").charAt(0)}
+                  </span>
+                )}
+              </div>
+              <span className="text-xs text-muted-foreground truncate">
+                {(listing.user as { name?: string })?.name || "Unknown"}
+              </span>
+              {(listing.user as { isVerified?: boolean })?.isVerified && (
+                <BadgeCheck className="h-3.5 w-3.5 text-blue-500 flex-shrink-0" />
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </Link>
+    </motion.div>
+  )
+}
+
+// Ad Banner Component
+function AdBanner({ ad, index }: { ad: Record<string, unknown>; index: number }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ delay: 0.1 }}
+      className="col-span-1 sm:col-span-2"
+    >
+      <Link href={(ad.cta_href as string) || "#"}>
+        <Card className={cn(
+          "overflow-hidden h-full bg-gradient-to-br p-6 border-0 group cursor-pointer min-h-[200px] flex flex-col justify-center",
+          (ad.gradient_colors as string) || "from-primary to-cyan-500"
+        )}>
+          <div className="relative z-10">
+            <Badge className="bg-white/20 text-white border-0 mb-3">Sponsored</Badge>
+            <h3 className="text-xl font-bold text-white mb-2">{ad.title as string}</h3>
+            <p className="text-white/80 text-sm mb-4">{ad.subtitle as string}</p>
+            <Button size="sm" className="bg-white text-foreground hover:bg-white/90 rounded-xl">
+              {(ad.cta_text as string) || "Learn More"}
+              <ArrowRight className="h-4 w-4 ml-2 group-hover:translate-x-1 transition-transform" />
+            </Button>
+          </div>
+          <div className="absolute top-0 right-0 opacity-10">
+            <Sparkles className="h-32 w-32 text-white" />
+          </div>
+        </Card>
+      </Link>
+    </motion.div>
+  )
+}
+
+export function DashboardHome() {
+  const { user } = useAuth()
+  const { balance, monthlyStats } = useWallet()
+  const [currentTime, setCurrentTime] = useState(new Date())
+  const categoryContainerRef = useRef<HTMLDivElement>(null)
+  const [page, setPage] = useState(1)
+  const [allListings, setAllListings] = useState<Record<string, unknown>[]>([])
+  
+  // Modal state for listing details
+  const [selectedListing, setSelectedListing] = useState<UnifiedListingData | null>(null)
+  const [isModalOpen, setIsModalOpen] = useState(false)
+
+  // Fetch real data from APIs with SWR for real-time updates
+  const { data: categoriesData, isLoading: categoriesLoading } = useSWR("/api/categories", fetcher, { refreshInterval: 60000 })
+  const { data: hotListingsData } = useSWR("/api/listings/trending?limit=6", fetcher, { refreshInterval: 30000 })
+  const { data: listingsData, isLoading: listingsLoading, mutate: mutateListings } = useSWR(
+    `/api/listings?status=active&limit=20&page=${page}`, 
+    fetcher, 
+    { refreshInterval: 15000 }
+  )
+  const { data: adsData } = useSWR("/api/ads?position=home-banner", fetcher)
+
+  const categories = categoriesData?.categories || []
+  const hotListings = hotListingsData?.listings || []
+  const adBanners = adsData?.ads || []
+  const pagination = listingsData?.pagination || {}
+
+  // Accumulate listings for infinite scroll
+  useEffect(() => {
+    if (listingsData?.listings) {
+      if (page === 1) {
+        setAllListings(listingsData.listings)
+      } else {
+        setAllListings(prev => [...prev, ...listingsData.listings])
+      }
+    }
+  }, [listingsData, page])
+
+  // Update time every second
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+
+  // Category scroll handlers
+  const scrollCategories = useCallback((direction: "left" | "right") => {
+    if (categoryContainerRef.current) {
+      const scrollAmount = 200
+      const currentScroll = categoryContainerRef.current.scrollLeft
+      const newScroll = direction === "left" 
+        ? currentScroll - scrollAmount 
+        : currentScroll + scrollAmount
+      categoryContainerRef.current.scrollTo({ left: newScroll, behavior: "smooth" })
+    }
+  }, [])
+
+  // Get greeting based on time with themed messages
+  const getGreetingData = () => {
+    const hour = currentTime.getHours()
+    const day = currentTime.getDay()
+    
+    // Morning (5am - 12pm)
+    if (hour >= 5 && hour < 12) {
+      const morningMessages = [
+        "Start your day with a great trade!",
+        "Early traders catch the best deals",
+        "Fresh listings await you today",
+        "Rise and trade - new opportunities are here",
+      ]
+      return { 
+        greeting: "Good morning", 
+        message: morningMessages[Math.floor(Math.random() * morningMessages.length)],
+        gradient: "from-amber-500/20 via-orange-500/10 to-transparent",
+        iconColor: "text-amber-500",
+        theme: "morning"
+      }
+    }
+    
+    // Afternoon (12pm - 5pm)
+    if (hour >= 12 && hour < 17) {
+      const afternoonMessages = [
+        "Peak trading hours - deals are happening now!",
+        "The market is buzzing with activity",
+        "Great time to list something new",
+        "Traders are actively searching right now",
+      ]
+      return { 
+        greeting: "Good afternoon", 
+        message: afternoonMessages[Math.floor(Math.random() * afternoonMessages.length)],
+        gradient: "from-blue-500/15 via-cyan-500/10 to-transparent",
+        iconColor: "text-blue-500",
+        theme: "afternoon"
+      }
+    }
+    
+    // Evening (5pm - 9pm)
+    if (hour >= 17 && hour < 21) {
+      const eveningMessages = [
+        "Wind down with some exciting trades",
+        "Evening deals are waiting for you",
+        "Perfect time to browse and discover",
+        "Don't miss tonight's featured listings",
+      ]
+      return { 
+        greeting: "Good evening", 
+        message: eveningMessages[Math.floor(Math.random() * eveningMessages.length)],
+        gradient: "from-orange-500/15 via-rose-500/10 to-transparent",
+        iconColor: "text-orange-500",
+        theme: "evening"
+      }
+    }
+    
+    // Night (9pm - 5am)
+    const nightMessages = [
+      "Night owl traders find hidden gems",
+      "Quiet hours, quality trades",
+      "Browse peacefully, trade tomorrow",
+      "Planning your next trade?",
+    ]
+    return { 
+      greeting: "Good night", 
+      message: nightMessages[Math.floor(Math.random() * nightMessages.length)],
+      gradient: "from-indigo-500/15 via-purple-500/10 to-transparent",
+      iconColor: "text-indigo-400",
+      theme: "night"
+    }
+  }
+  
+  const greetingData = getGreetingData()
+  
+  // FOMO messages based on real-time activity
+  const getFomoMessage = () => {
+    const messages = [
+      { text: `${hotListings.length || 5}+ hot deals right now`, icon: Flame },
+      { text: "Traders are making deals nearby", icon: MapPin },
+      { text: "New listings added in the last hour", icon: Clock },
+      { text: "Someone just traded successfully", icon: ArrowRightLeft },
+    ]
+    return messages[Math.floor(Math.random() * messages.length)]
+  }
+  
+  const fomoData = getFomoMessage()
+
+  // Format date
+  const formatDate = () => {
+    return currentTime.toLocaleDateString("en-US", {
+      weekday: "long",
+      month: "short",
+      day: "numeric",
+    })
+  }
+
+  // Format time
+  const formatTime = () => {
+    return currentTime.toLocaleTimeString("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+    })
+  }
+
+  // Insert ads into listings feed
+  const getListingsWithAds = () => {
+    const result: Array<{ type: "listing" | "ad"; data: Record<string, unknown>; index: number }> = []
+    let adIndex = 0
+    
+    allListings.forEach((listing, idx) => {
+      result.push({ type: "listing", data: listing, index: idx })
+      
+      // Insert ad after every 4 listings
+      if ((idx + 1) % 4 === 0 && adIndex < adBanners.length) {
+        result.push({ type: "ad", data: adBanners[adIndex], index: adIndex })
+        adIndex++
+      }
+    })
+    
+    return result
+  }
+
+  // Load more listings
+  const loadMore = () => {
+    if (pagination.hasMore) {
+      setPage(prev => prev + 1)
+    }
+  }
+
+  // Refresh listings
+  const refreshListings = () => {
+    setPage(1)
+    setAllListings([])
+    mutateListings()
+  }
+
+  // Handle viewing listing details in modal
+  const handleViewDetails = useCallback((listing: UnifiedListingData) => {
+    setSelectedListing(listing)
+    setIsModalOpen(true)
+  }, [])
+
+  // Handle making an offer (opens modal with offer tab)
+  const handleMakeOffer = useCallback((listing: UnifiedListingData) => {
+    setSelectedListing(listing)
+    setIsModalOpen(true)
+  }, [])
+
+  // Close modal
+  const handleCloseModal = useCallback(() => {
+    setIsModalOpen(false)
+    setSelectedListing(null)
+  }, [])
+
+  // Transform listing data for modal
+  const getModalListingData = useCallback(() => {
+    if (!selectedListing) return null
+    
+    const seller = selectedListing.seller || selectedListing.user
+    return {
+      id: selectedListing.id,
+      title: selectedListing.title,
+      description: selectedListing.description || "",
+      value: selectedListing.value,
+      tradeFor: selectedListing.tradeFor || selectedListing.wantedItems?.map(w => w.description),
+      category: selectedListing.categoryName || selectedListing.category,
+      condition: selectedListing.condition || "Good",
+      region: selectedListing.location?.region || selectedListing.region || "Unknown",
+      town: selectedListing.location?.town || selectedListing.town,
+      images: selectedListing.images || (selectedListing.primaryImage ? [selectedListing.primaryImage] : ["/placeholder.svg"]),
+      views: selectedListing.views || 0,
+      viewingNow: selectedListing.viewingNow,
+      saves: selectedListing.saves,
+      likes: selectedListing.likes,
+      hot: selectedListing.hot,
+      featured: selectedListing.featured,
+      createdAt: selectedListing.createdAt || new Date().toISOString(),
+      seller: {
+        id: seller?.id || "",
+        name: seller?.name || "Unknown",
+        avatar: seller?.avatar,
+        gender: seller?.gender,
+        rating: seller?.rating || 4.5,
+        trades: seller?.trades || 0,
+        verified: seller?.isVerified || seller?.verified || false,
+      },
+    }
+  }, [selectedListing])
+
+  const getGreeting = () => {
+    return greetingData.greeting
+  }
+
+  return (
+    <div className="space-y-6 pb-28 lg:pb-6">
+      {/* Hero Header Section */}
+      <motion.section
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-card via-card to-primary/5 border border-border/50 shadow-sm"
+      >
+        <div className="relative p-6 lg:p-8">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
+            {/* User info section */}
+            <div className="flex items-start gap-4">
+              <motion.div
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                className="relative"
+              >
+                <Link href="/dashboard/profile">
+                  <UserAvatar
+                    src={user?.avatar}
+                    name={user?.name}
+                    gender={user?.gender}
+                    size="xl"
+                    ring="gradient"
+                    showOnlineStatus
+                    isOnline={true}
+                    showVerifiedBadge
+                    isVerified={user?.isVerified}
+                  />
+                </Link>
+                {/* Level badge */}
+                <div className="absolute -bottom-1 -right-1 w-7 h-7 rounded-full bg-gradient-to-br from-primary to-cyan-500 flex items-center justify-center border-2 border-card shadow-lg">
+                  <Crown className="h-3.5 w-3.5 text-white" />
+                </div>
+              </motion.div>
+              
+              <div className="flex-1">
+                <div className="flex items-center gap-3 text-sm text-muted-foreground mb-1">
+                  <div className="flex items-center gap-1.5">
+                    <Calendar className="h-3.5 w-3.5" />
+                    <span>{formatDate()}</span>
+                  </div>
+                  <div className="w-1 h-1 rounded-full bg-muted-foreground/50" />
+                  <div className="flex items-center gap-1.5 font-mono">
+                    <Clock className="h-3.5 w-3.5" />
+                    <span>{formatTime()}</span>
+                  </div>
+                </div>
+                <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-foreground tracking-tight">
+                  {greetingData.greeting}, <span className="text-gradient">{user?.name?.split(" ")[0] || "Trader"}</span>
+                </h1>
+                
+                {/* Motivational message */}
+                <motion.p 
+                  key={greetingData.message}
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className="text-sm text-muted-foreground mt-1"
+                >
+                  {greetingData.message}
+                </motion.p>
+                
+                <div className="flex flex-wrap items-center gap-2 mt-2">
+                  {user?.isVerified ? (
+                    <Badge className="bg-blue-100 text-blue-600 border-blue-200 gap-1">
+                      <BadgeCheck className="h-3 w-3" />
+                      Verified Trader
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-muted-foreground gap-1">
+                      <Shield className="h-3 w-3" />
+                      Unverified
+                    </Badge>
+                  )}
+                  
+                  {/* FOMO indicator */}
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ delay: 0.3 }}
+                    className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-primary/10 border border-primary/20"
+                  >
+                    <fomoData.icon className="h-3 w-3 text-primary" />
+                    <span className="text-xs font-medium text-primary">{fomoData.text}</span>
+                  </motion.div>
+                </div>
+              </div>
+            </div>
+
+            {/* Action buttons */}
+            <div className="flex flex-wrap gap-3 lg:gap-4">
+              <Button 
+                variant="outline" 
+                className="rounded-xl bg-transparent border-border hover:bg-primary/5 hover:border-primary/50 transition-all" 
+                asChild
+              >
+                <Link href="/dashboard/browse">
+                  <Search className="h-4 w-4 mr-2" />
+                  Browse
+                </Link>
+              </Button>
+              <Button 
+                className="rounded-xl bg-gradient-to-r from-primary to-cyan-500 hover:opacity-90 shadow-lg shadow-primary/25 transition-all text-white" 
+                asChild
+              >
+                <Link href="/dashboard/listings/new">
+                  <Plus className="h-4 w-4 mr-2" />
+                  New Trade
+                  <Sparkles className="h-3.5 w-3.5 ml-2 opacity-70" />
+                </Link>
+              </Button>
+            </div>
+          </div>
+        </div>
+      </motion.section>
+
+      {/* Wallet Card */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.1 }}
+      >
+        <Card className="overflow-hidden border-primary/20 bg-gradient-to-br from-card via-primary/5 to-card hover:border-primary/40 transition-all">
+          <CardContent className="p-6">
+            <div className="flex items-start justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <motion.div
+                  className="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary to-cyan-500 flex items-center justify-center shadow-xl"
+                  whileHover={{ scale: 1.1, rotate: 5 }}
+                  transition={{ type: "spring", stiffness: 400 }}
+                >
+                  <Wallet className="h-7 w-7 text-white" />
+                </motion.div>
+                <div>
+                  <p className="text-sm text-muted-foreground font-medium">Credit Balance</p>
+                  <LiveIndicator isLive />
+                </div>
+              </div>
+              <Button variant="ghost" size="icon" className="rounded-xl hover:bg-primary/10" asChild>
+                <Link href="/dashboard/wallet">
+                  <ArrowRight className="h-5 w-5" />
+                </Link>
+              </Button>
+            </div>
+            
+            <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+              <motion.div 
+                key={balance}
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+              >
+                <p className="text-4xl sm:text-5xl font-bold text-gradient">
+                  BT<AnimatedCounter value={balance} duration={1200} decimals={2} />
+                </p>
+              </motion.div>
+              
+              {/* Monthly stats */}
+              <div className="flex gap-4">
+                <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200">
+                  <div className="flex items-center gap-2 mb-1">
+                    <ArrowUpRight className="h-4 w-4 text-emerald-600" />
+                    <span className="text-xs text-muted-foreground">Received</span>
+                  </div>
+                  <p className="text-lg font-semibold text-emerald-600">
+                    +BT<AnimatedCounter value={monthlyStats?.received || 0} decimals={2} />
+                  </p>
+                </div>
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200">
+                  <div className="flex items-center gap-2 mb-1">
+                    <ArrowRightLeft className="h-4 w-4 text-rose-600" />
+                    <span className="text-xs text-muted-foreground">Transferred</span>
+                  </div>
+                  <p className="text-lg font-semibold text-rose-600">
+                    -BT<AnimatedCounter value={monthlyStats?.spent || 0} decimals={2} />
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-2 mt-4">
+              <Button variant="outline" size="sm" className="flex-1 rounded-xl bg-transparent" asChild>
+                <Link href="/dashboard/wallet">
+                  History
+                </Link>
+              </Button>
+              <Button size="sm" className="flex-1 rounded-xl bg-gradient-to-r from-primary to-cyan-500 text-white" asChild>
+                <Link href="/dashboard/wallet">
+                  Top Up
+                  <Zap className="h-3.5 w-3.5 ml-1" />
+                </Link>
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </motion.div>
+
+      {/* Categories Section */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.15 }}
+      >
+        <Card className="border-border/50 bg-card overflow-hidden">
+          <CardHeader className="pb-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-gradient-to-br from-violet-500 to-purple-500 shadow-lg">
+                  <Layers className="h-5 w-5 text-white" />
+                </div>
+                <div>
+                  <CardTitle className="text-lg font-semibold">Browse Categories</CardTitle>
+                  <p className="text-sm text-muted-foreground">{categories.length} categories available</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9 rounded-xl hover:bg-primary/10"
+                  onClick={() => scrollCategories("left")}
+                >
+                  <ChevronLeft className="h-5 w-5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9 rounded-xl hover:bg-primary/10"
+                  onClick={() => scrollCategories("right")}
+                >
+                  <ChevronRight className="h-5 w-5" />
+                </Button>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div 
+              ref={categoryContainerRef}
+              className="flex gap-3 overflow-x-auto no-scrollbar pb-2 -mx-2 px-2"
+            >
+              {categoriesLoading ? (
+                // Skeleton loading
+                Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className="w-[120px] flex-shrink-0">
+                    <div className="p-4 rounded-2xl bg-muted/50 animate-pulse">
+                      <div className="w-12 h-12 rounded-xl bg-muted mb-3 mx-auto" />
+                      <div className="h-4 bg-muted rounded w-16 mx-auto mb-2" />
+                      <div className="h-3 bg-muted rounded w-12 mx-auto" />
+                    </div>
+                  </div>
+                ))
+              ) : (
+                categories.map((category: { id: string; name: string; slug: string; listing_count: number }, index: number) => {
+                  const IconComponent = categoryIcons[category.slug] || GemIcon
+                  const colors = categoryColors[category.slug] || categoryColors.other
+                  
+                  return (
+                    <motion.div
+                      key={category.id}
+                      initial={{ opacity: 0, x: 20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: 0.03 * index }}
+                      whileHover={{ scale: 1.02, y: -4 }}
+                      whileTap={{ scale: 0.98 }}
+                      className="flex-shrink-0"
+                    >
+                      <Link href={`/dashboard/browse?category=${category.slug}`}>
+                        <div className={cn(
+                          "w-[120px] p-4 rounded-2xl border transition-all text-center group cursor-pointer",
+                          colors.bg, colors.border, "hover:shadow-lg"
+                        )}>
+                          <motion.div 
+                            className={cn(
+                              "w-12 h-12 rounded-xl flex items-center justify-center bg-gradient-to-br mb-3 mx-auto shadow-lg",
+                              colors.gradient
+                            )}
+                            whileHover={{ rotate: 10 }}
+                          >
+                            <IconComponent className="h-6 w-6 text-white" animated={false} />
+                          </motion.div>
+                          <p className={cn("font-medium text-sm truncate", colors.text)}>
+                            {category.name}
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {category.listing_count} items
+                          </p>
+                        </div>
+                      </Link>
+                    </motion.div>
+                  )
+                })
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </motion.div>
+
+      {/* Hot Listings Section */}
+      {hotListings.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+        >
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-xl bg-gradient-to-br from-amber-500 to-orange-500 shadow-lg">
+                <Flame className="h-5 w-5 text-white" />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-foreground">Hot Listings</h2>
+                <p className="text-sm text-muted-foreground">Most popular trades right now</p>
+              </div>
+            </div>
+            <Button variant="ghost" size="sm" className="rounded-xl" asChild>
+              <Link href="/dashboard/browse?sort=popular">
+                View All
+                <ChevronRight className="h-4 w-4 ml-1" />
+              </Link>
+            </Button>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            {hotListings.slice(0, 6).map((listing: Record<string, unknown>, index: number) => (
+              <UnifiedListingCard
+                key={listing.id as string}
+                listing={{ ...listing, hot: true } as UnifiedListingData}
+                index={index}
+                variant="compact"
+                onViewDetails={handleViewDetails}
+                onMakeOffer={handleMakeOffer}
+              />
+            ))}
+          </div>
+        </motion.div>
+      )}
+
+      {/* All Listings Feed */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.25 }}
+      >
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-xl bg-gradient-to-br from-primary to-cyan-500 shadow-lg">
+              <Layers className="h-5 w-5 text-white" />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-foreground">Latest Listings</h2>
+              <p className="text-sm text-muted-foreground">Discover new trades in your area</p>
+            </div>
+          </div>
+          <Button 
+            variant="outline" 
+            size="sm" 
+            className="rounded-xl gap-2 bg-transparent" 
+            onClick={refreshListings}
+            disabled={listingsLoading}
+          >
+            <RefreshCw className={cn("h-4 w-4", listingsLoading && "animate-spin")} />
+            Refresh
+          </Button>
+        </div>
+
+        {/* Listings Grid with Ads */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {getListingsWithAds().map((item) => (
+            item.type === "listing" ? (
+              <UnifiedListingCard 
+                key={`listing-${item.data.id}`} 
+                listing={item.data as UnifiedListingData} 
+                index={item.index}
+                onViewDetails={handleViewDetails}
+                onMakeOffer={handleMakeOffer}
+              />
+            ) : (
+              <AdBanner key={`ad-${item.index}`} ad={item.data} index={item.index} />
+            )
+          ))}
+        </div>
+
+        {/* Loading state */}
+        {listingsLoading && page === 1 && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-4">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <Card key={i} className="overflow-hidden">
+                <div className="aspect-[4/3] bg-muted animate-pulse" />
+                <CardContent className="p-4 space-y-3">
+                  <div className="h-4 bg-muted rounded animate-pulse w-3/4" />
+                  <div className="h-5 bg-muted rounded animate-pulse w-1/2" />
+                  <div className="h-3 bg-muted rounded animate-pulse w-full" />
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+
+        {/* Load More Button */}
+        {pagination.hasMore && !listingsLoading && (
+          <div className="flex justify-center mt-8">
+            <Button 
+              variant="outline" 
+              size="lg" 
+              className="rounded-xl px-8 bg-transparent"
+              onClick={loadMore}
+            >
+              Load More Listings
+              <ChevronRight className="h-4 w-4 ml-2" />
+            </Button>
+          </div>
+        )}
+
+        {/* Empty state */}
+        {allListings.length === 0 && !listingsLoading && (
+          <Card className="p-12 text-center">
+            <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mx-auto mb-4">
+              <Layers className="h-8 w-8 text-muted-foreground" />
+            </div>
+            <h3 className="text-lg font-semibold mb-2">No listings yet</h3>
+            <p className="text-muted-foreground mb-4">Be the first to create a trade listing!</p>
+            <Button className="rounded-xl bg-gradient-to-r from-primary to-cyan-500 text-white" asChild>
+              <Link href="/dashboard/listings/new">
+                <Plus className="h-4 w-4 mr-2" />
+                Create Trade
+              </Link>
+            </Button>
+          </Card>
+        )}
+      </motion.div>
+
+      {/* Listing Detail Modal */}
+      <ModernListingModal
+        listing={getModalListingData()}
+        isOpen={isModalOpen}
+        onClose={handleCloseModal}
+        onMakeOffer={(listing) => {
+          // Navigate to offer page or open offer modal
+          window.location.href = `/dashboard/offers/new?listingId=${listing.id}`
+        }}
+        onMessage={(listing) => {
+          // Navigate to messages
+          window.location.href = `/dashboard/messages?userId=${listing.seller.id}`
+        }}
+      />
+    </div>
+  )
+}
