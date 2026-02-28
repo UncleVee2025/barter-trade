@@ -1,17 +1,16 @@
 // Database abstraction layer for Barter Trade Namibia
-// PRODUCTION MODE - Strictly requires MySQL database connection
+// PRODUCTION MODE - Uses Neon PostgreSQL (serverless)
 // NO FALLBACK - Application will error if database is unavailable
 
+import { neon, neonConfig } from "@neondatabase/serverless"
 import bcrypt from "bcryptjs"
 
-// Check if we have MySQL configured
-function checkMySQLConfig(): boolean {
-  return !!(
-    process.env.MYSQL_HOST &&
-    process.env.MYSQL_USER &&
-    process.env.MYSQL_PASSWORD &&
-    process.env.MYSQL_DATABASE
-  )
+// Configure Neon for serverless environments
+neonConfig.fetchConnectionCache = true
+
+// Check if we have Neon configured
+function checkNeonConfig(): boolean {
+  return !!process.env.DATABASE_URL
 }
 
 // Export function to check database configuration
@@ -21,29 +20,24 @@ export function isDemoMode(): boolean {
 
 // Export function to verify database is configured
 export function requireDatabase(): void {
-  if (!checkMySQLConfig()) {
+  if (!checkNeonConfig()) {
     throw new Error(
-      "Database not configured. Please set MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, and MYSQL_DATABASE environment variables."
+      "Database not configured. Please set DATABASE_URL environment variable for Neon PostgreSQL."
     )
   }
 }
 
 // Log database mode on startup - server-side only
 if (typeof window === "undefined") {
-  const hasMysql = checkMySQLConfig()
+  const hasNeon = checkNeonConfig()
   console.log(
-    `[DB] Database Mode: ${hasMysql ? "MySQL Production" : "NOT CONFIGURED - WILL ERROR"}`
+    `[DB] Database Mode: ${hasNeon ? "Neon PostgreSQL Production" : "NOT CONFIGURED - WILL ERROR"}`
   )
-  if (hasMysql) {
-    console.log(`[DB] MySQL Host: ${process.env.MYSQL_HOST}`)
-    console.log(`[DB] MySQL Database: ${process.env.MYSQL_DATABASE}`)
-  } else {
+  if (!hasNeon) {
     console.error(
-      "[DB] CRITICAL: MySQL not configured. Application requires database connection."
+      "[DB] CRITICAL: Neon not configured. Application requires database connection."
     )
-    console.error(
-      "[DB] Required: MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE"
-    )
+    console.error("[DB] Required: DATABASE_URL")
   }
 }
 
@@ -259,66 +253,41 @@ export function generateId(): string {
   return crypto.randomUUID()
 }
 
-// MySQL pool (lazy loaded)
-let mysqlPool: unknown = null
-let poolInitialized = false
+// Create Neon SQL client (lazy initialized)
+let sqlClient: ReturnType<typeof neon> | null = null
 
-async function getMySQLPool() {
-  const hasMySQL = checkMySQLConfig()
-  
-  if (!hasMySQL) {
+function getSqlClient() {
+  if (!checkNeonConfig()) {
     throw new Error(
-      "Database not configured. Set MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, and MYSQL_DATABASE environment variables."
+      "Database not configured. Set DATABASE_URL environment variable for Neon PostgreSQL."
     )
   }
   
-  if (mysqlPool) return mysqlPool
-  
-  try {
-    const mysql = await import("mysql2/promise")
-    
-    mysqlPool = mysql.createPool({
-      host: process.env.MYSQL_HOST || "localhost",
-      user: process.env.MYSQL_USER || "barter_trade",
-      password: process.env.MYSQL_PASSWORD || "Freedom@2025",
-      database: process.env.MYSQL_DATABASE || "barter_trade",
-      port: Number(process.env.MYSQL_PORT) || 3306,
-      waitForConnections: true,
-      connectionLimit: 20,
-      maxIdle: 10,
-      idleTimeout: 60000,
-      queueLimit: 0,
-      enableKeepAlive: true,
-      keepAliveInitialDelay: 10000,
-      connectTimeout: 30000,
-      charset: "utf8mb4",
-    })
-    
-    // Test the connection
-    const connection = await (mysqlPool as { getConnection: () => Promise<{ release: () => void }> }).getConnection()
-    connection.release()
-    
-    console.log("[DB] MySQL connection pool established successfully")
-    console.log(`[DB] Connected to: ${process.env.MYSQL_HOST}/${process.env.MYSQL_DATABASE}`)
-    poolInitialized = true
-    
-    return mysqlPool
-  } catch (error) {
-    console.error("[DB] MySQL connection failed:", error)
-    throw new Error(`Database connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+  if (!sqlClient) {
+    sqlClient = neon(process.env.DATABASE_URL!)
+    console.log("[DB] Neon PostgreSQL client initialized")
   }
+  
+  return sqlClient
 }
 
-// Query function - strictly MySQL only
+// Convert MySQL-style ? placeholders to PostgreSQL $1, $2 style
+function convertPlaceholders(sql: string): string {
+  let index = 0
+  return sql.replace(/\?/g, () => `$${++index}`)
+}
+
+// Query function - uses Neon PostgreSQL
 export async function query<T = unknown>(sql: string, params?: unknown[]): Promise<T[]> {
-  const pool = await getMySQLPool()
+  const client = getSqlClient()
+  const pgSql = convertPlaceholders(sql)
   
   try {
-    const [rows] = await (pool as { execute: (sql: string, params?: unknown[]) => Promise<[T[], unknown]> }).execute(sql, params)
-    return rows
+    const rows = await client(pgSql, params as (string | number | boolean | null | undefined)[])
+    return rows as T[]
   } catch (error) {
     console.error("[DB] Query error:", error)
-    console.error("[DB] SQL:", sql.substring(0, 200))
+    console.error("[DB] SQL:", pgSql.substring(0, 200))
     throw error
   }
 }
@@ -332,57 +301,75 @@ export async function execute(
   sql: string,
   params?: unknown[]
 ): Promise<{ insertId: number; affectedRows: number; changedRows: number }> {
-  const pool = await getMySQLPool()
+  const client = getSqlClient()
+  const pgSql = convertPlaceholders(sql)
   
   try {
-    const [result] = await (pool as { execute: (sql: string, params?: unknown[]) => Promise<[{ insertId: number; affectedRows: number; changedRows?: number }, unknown]> }).execute(sql, params)
+    // For INSERT with RETURNING, extract the id
+    const isInsert = sql.trim().toUpperCase().startsWith("INSERT")
+    let modifiedSql = pgSql
+    
+    // Add RETURNING id for INSERT statements if not already present
+    if (isInsert && !pgSql.toUpperCase().includes("RETURNING")) {
+      modifiedSql = pgSql.replace(/;?\s*$/, " RETURNING id")
+    }
+    
+    const result = await client(modifiedSql, params as (string | number | boolean | null | undefined)[])
+    
     return {
-      insertId: result.insertId,
-      affectedRows: result.affectedRows,
-      changedRows: result.changedRows || 0,
+      insertId: result[0]?.id || 0,
+      affectedRows: result.length || 1,
+      changedRows: result.length || 0,
     }
   } catch (error) {
     console.error("[DB] Execute error:", error)
-    console.error("[DB] SQL:", sql.substring(0, 200))
+    console.error("[DB] SQL:", pgSql.substring(0, 200))
     throw error
   }
 }
 
-// Transaction helper
+// Transaction helper using Neon's transaction support
 export async function transaction<T>(
   callback: (conn: {
     query: <R = unknown>(sql: string, params?: unknown[]) => Promise<R[]>
     execute: (sql: string, params?: unknown[]) => Promise<{ insertId: number; affectedRows: number; changedRows: number }>
   }) => Promise<T>
 ): Promise<T> {
-  const pool = await getMySQLPool()
-  const connection = await (pool as { getConnection: () => Promise<unknown> }).getConnection()
+  const client = getSqlClient()
+  
+  // Start transaction
+  await client`BEGIN`
   
   try {
-    await (connection as { beginTransaction: () => Promise<void> }).beginTransaction()
-    
     const result = await callback({
       query: async <R = unknown>(sql: string, params?: unknown[]): Promise<R[]> => {
-        const [rows] = await (connection as { execute: (sql: string, params?: unknown[]) => Promise<[R[], unknown]> }).execute(sql, params)
-        return rows
+        const pgSql = convertPlaceholders(sql)
+        const rows = await client(pgSql, params as (string | number | boolean | null | undefined)[])
+        return rows as R[]
       },
       execute: async (sql: string, params?: unknown[]) => {
-        const [result] = await (connection as { execute: (sql: string, params?: unknown[]) => Promise<[{ insertId: number; affectedRows: number; changedRows?: number }, unknown]> }).execute(sql, params)
+        const pgSql = convertPlaceholders(sql)
+        const isInsert = sql.trim().toUpperCase().startsWith("INSERT")
+        let modifiedSql = pgSql
+        
+        if (isInsert && !pgSql.toUpperCase().includes("RETURNING")) {
+          modifiedSql = pgSql.replace(/;?\s*$/, " RETURNING id")
+        }
+        
+        const result = await client(modifiedSql, params as (string | number | boolean | null | undefined)[])
         return {
-          insertId: result.insertId,
-          affectedRows: result.affectedRows,
-          changedRows: result.changedRows || 0,
+          insertId: result[0]?.id || 0,
+          affectedRows: result.length || 1,
+          changedRows: result.length || 0,
         }
       },
     })
     
-    await (connection as { commit: () => Promise<void> }).commit()
+    await client`COMMIT`
     return result
   } catch (error) {
-    await (connection as { rollback: () => Promise<void> }).rollback()
+    await client`ROLLBACK`
     throw error
-  } finally {
-    (connection as { release: () => void }).release()
   }
 }
 
@@ -504,7 +491,7 @@ export async function addWalletBalance(
 // Export bcrypt for password hashing
 export { bcrypt }
 
-
+// Legacy compatibility - return the SQL client
 export async function getPool() {
-  return await getMySQLPool()
+  return getSqlClient()
 }
